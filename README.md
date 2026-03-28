@@ -1,6 +1,6 @@
 # hive
 
-CLI tool for orchestrating AI agent work sessions using [bd](https://github.com/bead-code/beads) tickets, git worktrees, and [opencode](https://opencode.ai).
+CLI tool for orchestrating AI agent work sessions using [bd](https://github.com/steveyegge/beads) tickets, git worktrees, and [opencode](https://opencode.ai).
 
 ## Install
 
@@ -33,6 +33,6 @@ Cleans up after a ticket's branch has been merged into main:
 
 ## Requirements
 
-- [bd](https://github.com/bead-code/beads) - issue tracker
+- [bd](https://github.com/steveyegge/beads) - issue tracker
 - [opencode](https://opencode.ai) - AI coding assistant
 - git
