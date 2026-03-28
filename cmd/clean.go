@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -19,15 +18,22 @@ var cleanCmd = &cobra.Command{
 	RunE:  runClean,
 }
 
+var (
+	isBranchMergedFn = isBranchMerged
+	removeWorktreeFn = removeWorktree
+	deleteBranchFn   = deleteBranch
+)
+
 func init() {
 	cleanCmd.Flags().BoolVarP(&forceClean, "force", "f", false, "Force cleanup even if branch is not merged into main")
 	rootCmd.AddCommand(cleanCmd)
 }
 
 func runClean(cmd *cobra.Command, args []string) error {
+	out := commandStdout(cmd)
 	ticketID := args[0]
 
-	repoRoot, err := gitRepoRoot()
+	repoRoot, err := gitRepoRootFn()
 	if err != nil {
 		return err
 	}
@@ -40,7 +46,7 @@ func runClean(cmd *cobra.Command, args []string) error {
 	branch := ticketID
 
 	if !forceClean {
-		merged, err := isBranchMerged(branch)
+		merged, err := isBranchMergedFn(branch)
 		if err != nil {
 			return err
 		}
@@ -49,36 +55,40 @@ func runClean(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := removeWorktree(worktreePath); err != nil {
+	if err := removeWorktreeFn(worktreePath); err != nil {
 		return err
 	}
-	fmt.Printf("Removed worktree: %s\n", worktreePath)
+	fmt.Fprintf(out, "Removed worktree: %s\n", worktreePath)
 
-	if err := deleteBranch(branch, forceClean); err != nil {
+	if err := deleteBranchFn(branch, forceClean); err != nil {
 		return err
 	}
-	fmt.Printf("Deleted branch: %s\n", branch)
+	fmt.Fprintf(out, "Deleted branch: %s\n", branch)
 
 	return nil
 }
 
 func isBranchMerged(branch string) (bool, error) {
-	out, err := exec.Command("git", "branch", "--merged", "main").Output()
+	out, err := execCommand("git", "branch", "--merged", "main").Output()
 	if err != nil {
 		return false, fmt.Errorf("failed to check merged branches: %w", err)
 	}
 
-	for _, line := range strings.Split(string(out), "\n") {
+	return branchInMergedOutput(branch, string(out)), nil
+}
+
+func branchInMergedOutput(branch, raw string) bool {
+	for _, line := range strings.Split(raw, "\n") {
 		name := strings.TrimSpace(line)
 		if name == branch {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 func removeWorktree(path string) error {
-	cmd := exec.Command("bd", "worktree", "remove", path, "--force")
+	cmd := execCommand("bd", "worktree", "remove", path, "--force")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -89,7 +99,7 @@ func deleteBranch(branch string, force bool) error {
 	if force {
 		flag = "-D"
 	}
-	cmd := exec.Command("git", "branch", flag, branch)
+	cmd := execCommand("git", "branch", flag, branch)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

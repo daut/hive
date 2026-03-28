@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,18 @@ type bdIssue struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 }
+
+var (
+	fetchTicketFn      = fetchTicket
+	moveToInProgressFn = moveToInProgress
+	gitRepoRootFn      = gitRepoRoot
+	createWorktreeFn   = createWorktree
+	launchOpencodeFn   = launchOpencode
+	execCommand        = exec.Command
+	lookPath           = exec.LookPath
+	changeDir          = os.Chdir
+	syscallExec        = syscall.Exec
+)
 
 var startCmd = &cobra.Command{
 	Use:   "start <ticket-id>",
@@ -33,37 +46,38 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
+	out := commandStdout(cmd)
 	ticketID := args[0]
 
-	issue, err := fetchTicket(ticketID)
+	issue, err := fetchTicketFn(ticketID)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Ticket: %s — %s\n", issue.ID, issue.Title)
+	fmt.Fprintf(out, "Ticket: %s - %s\n", issue.ID, issue.Title)
 
-	if err := moveToInProgress(ticketID); err != nil {
+	if err := moveToInProgressFn(ticketID); err != nil {
 		return err
 	}
-	fmt.Println("Status: moved to in_progress")
+	fmt.Fprintln(out, "Status: moved to in_progress")
 
-	repoRoot, err := gitRepoRoot()
+	repoRoot, err := gitRepoRootFn()
 	if err != nil {
 		return err
 	}
 
 	worktreePath := filepath.Join(repoRoot, ".worktrees", ticketID)
-	if err := createWorktree(worktreePath, ticketID); err != nil {
+	if err := createWorktreeFn(worktreePath, ticketID); err != nil {
 		return err
 	}
-	fmt.Printf("Worktree: %s\n", worktreePath)
+	fmt.Fprintf(out, "Worktree: %s\n", worktreePath)
 
 	prompt := buildPrompt(issue)
-	fmt.Println("Launching opencode...")
-	return launchOpencode(worktreePath, prompt)
+	fmt.Fprintln(out, "Launching opencode...")
+	return launchOpencodeFn(worktreePath, prompt)
 }
 
 func fetchTicket(id string) (*bdIssue, error) {
-	out, err := exec.Command("bd", "show", id, "--json").Output()
+	out, err := execCommand("bd", "show", id, "--json").Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ticket %s: %w", id, err)
 	}
@@ -76,13 +90,13 @@ func fetchTicket(id string) (*bdIssue, error) {
 }
 
 func moveToInProgress(id string) error {
-	cmd := exec.Command("bd", "update", id, "--status", "in_progress")
+	cmd := execCommand("bd", "update", id, "--status", "in_progress")
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func gitRepoRoot() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	out, err := execCommand("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", fmt.Errorf("not inside a git repository: %w", err)
 	}
@@ -90,7 +104,7 @@ func gitRepoRoot() (string, error) {
 }
 
 func createWorktree(path, branch string) error {
-	cmd := exec.Command("bd", "worktree", "create", path, "--branch", branch)
+	cmd := execCommand("bd", "worktree", "create", path, "--branch", branch)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -108,14 +122,22 @@ actionable steps. Do not start implementing yet — just plan.`, issue.Title, is
 }
 
 func launchOpencode(dir, prompt string) error {
-	binary, err := exec.LookPath("opencode")
+	binary, err := lookPath("opencode")
 	if err != nil {
 		return fmt.Errorf("opencode not found in PATH: %w", err)
 	}
 
-	if err := os.Chdir(dir); err != nil {
+	if err := changeDir(dir); err != nil {
 		return fmt.Errorf("failed to chdir to worktree: %w", err)
 	}
 
-	return syscall.Exec(binary, []string{"opencode", "--prompt", prompt}, os.Environ())
+	return syscallExec(binary, []string{"opencode", "--prompt", prompt}, os.Environ())
+}
+
+func commandStdout(cmd *cobra.Command) io.Writer {
+	if cmd == nil {
+		return os.Stdout
+	}
+
+	return cmd.OutOrStdout()
 }

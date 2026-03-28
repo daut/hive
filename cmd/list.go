@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +15,8 @@ var listCmd = &cobra.Command{
 	RunE:  runList,
 }
 
+var listWorktreesFn = listWorktrees
+
 func init() {
 	rootCmd.AddCommand(listCmd)
 }
@@ -27,39 +28,45 @@ type worktreeEntry struct {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
-	repoRoot, err := gitRepoRoot()
+	out := commandStdout(cmd)
+
+	repoRoot, err := gitRepoRootFn()
 	if err != nil {
 		return err
 	}
 
-	entries, err := listWorktrees(repoRoot)
+	entries, err := listWorktreesFn(repoRoot)
 	if err != nil {
 		return err
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("No active sessions.")
+		fmt.Fprintln(out, "No active sessions.")
 		return nil
 	}
 
-	fmt.Printf("%-15s %-20s %s\n", "TICKET", "BRANCH", "PATH")
+	fmt.Fprintf(out, "%-15s %-20s %s\n", "TICKET", "BRANCH", "PATH")
 	for _, e := range entries {
-		fmt.Printf("%-15s %-20s %s\n", e.ticket, e.branch, e.path)
+		fmt.Fprintf(out, "%-15s %-20s %s\n", e.ticket, e.branch, e.path)
 	}
 	return nil
 }
 
 func listWorktrees(repoRoot string) ([]worktreeEntry, error) {
-	out, err := exec.Command("git", "worktree", "list", "--porcelain").Output()
+	out, err := execCommand("git", "worktree", "list", "--porcelain").Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list worktrees: %w", err)
 	}
 
+	return parseWorktreeList(repoRoot, string(out)), nil
+}
+
+func parseWorktreeList(repoRoot, raw string) []worktreeEntry {
 	worktreesDir := filepath.Join(repoRoot, ".worktrees")
 	var entries []worktreeEntry
 	var current worktreeEntry
 
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(raw, "\n") {
 		switch {
 		case strings.HasPrefix(line, "worktree "):
 			current = worktreeEntry{path: strings.TrimPrefix(line, "worktree ")}
@@ -75,5 +82,5 @@ func listWorktrees(repoRoot string) ([]worktreeEntry, error) {
 		}
 	}
 
-	return entries, nil
+	return entries
 }
