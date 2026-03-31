@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -14,9 +15,20 @@ import (
 )
 
 type bdIssue struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
+	ID          string        `json:"id"`
+	Title       string        `json:"title"`
+	Description string        `json:"description"`
+	Dependents  []bdDependent `json:"dependents"`
+}
+
+type bdDependent struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	Status         string `json:"status"`
+	Priority       int    `json:"priority"`
+	IssueType      string `json:"issue_type"`
+	DependencyType string `json:"dependency_type"`
 }
 
 var (
@@ -115,14 +127,46 @@ func createWorktree(path, branch string) error {
 }
 
 func buildPrompt(issue *bdIssue) string {
-	return fmt.Sprintf(`Here is the ticket you'll be working on:
+	var prompt strings.Builder
+	fmt.Fprintf(&prompt, `Here is the ticket you'll be working on:
 
 Title: %s
 Description:
 %s
 
-Please create a plan for implementing this ticket. Break it down into clear,
-actionable steps. Do not start implementing yet — just plan.`, issue.Title, issue.Description)
+`, issue.Title, issue.Description)
+
+	children := directChildren(issue.Dependents)
+	if len(children) > 0 {
+		prompt.WriteString("Direct child tasks for reference:\n")
+		for _, child := range children {
+			fmt.Fprintf(&prompt, "- %s: %s [%s]\n", child.ID, child.Title, child.Status)
+			if child.Description != "" {
+				fmt.Fprintf(&prompt, "  Description: %s\n", child.Description)
+			}
+		}
+		prompt.WriteString("\n")
+	}
+
+	prompt.WriteString(`Please create a plan for implementing this ticket. Break it down into clear,
+actionable steps. Do not start implementing yet — just plan.`)
+
+	return prompt.String()
+}
+
+func directChildren(dependents []bdDependent) []bdDependent {
+	children := make([]bdDependent, 0, len(dependents))
+	for _, dependent := range dependents {
+		if dependent.DependencyType == "parent-child" {
+			children = append(children, dependent)
+		}
+	}
+
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].ID < children[j].ID
+	})
+
+	return children
 }
 
 func launchOpencode(dir, prompt string) error {

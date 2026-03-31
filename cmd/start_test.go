@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,9 @@ func TestBuildPromptIncludesTicketDetails(t *testing.T) {
 			t.Fatalf("prompt %q does not contain %q", prompt, want)
 		}
 	}
+	if strings.Contains(prompt, "Direct child tasks for reference:") {
+		t.Fatalf("prompt %q unexpectedly contains child task section", prompt)
+	}
 }
 
 func TestFetchTicketParsesBeadsShowJSONArray(t *testing.T) {
@@ -35,6 +39,13 @@ func TestFetchTicketParsesBeadsShowJSONArray(t *testing.T) {
 		ID:          "markan-frd",
 		Title:       "Phase 2 manual LinkedIn publishing rollout",
 		Description: "Track implementation work.",
+		Dependents: []bdDependent{{
+			ID:             "markan-frd.1",
+			Title:          "LinkedIn OAuth Integration",
+			Description:    "Implement OAuth setup.",
+			Status:         "open",
+			DependencyType: "parent-child",
+		}},
 	}
 	raw, err := json.Marshal([]bdIssue{*want})
 	if err != nil {
@@ -46,8 +57,57 @@ func TestFetchTicketParsesBeadsShowJSONArray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchTicket returned error: %v", err)
 	}
-	if *got != *want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("fetchTicket returned %+v, want %+v", *got, *want)
+	}
+}
+
+func TestBuildPromptIncludesDirectChildTasksForReference(t *testing.T) {
+	issue := &bdIssue{
+		Title:       "Phase 2 manual LinkedIn publishing rollout",
+		Description: "Track implementation work.",
+		Dependents: []bdDependent{
+			{
+				ID:             "markan-frd.2",
+				Title:          "LinkedIn Posting Client",
+				Description:    "Build posting client.",
+				Status:         "open",
+				DependencyType: "parent-child",
+			},
+			{
+				ID:             "markan-frd-related",
+				Title:          "Something related",
+				Status:         "open",
+				DependencyType: "related",
+			},
+			{
+				ID:             "markan-frd.1",
+				Title:          "LinkedIn OAuth Integration",
+				Status:         "in_progress",
+				DependencyType: "parent-child",
+			},
+		},
+	}
+
+	prompt := buildPrompt(issue)
+
+	for _, want := range []string{
+		"Direct child tasks for reference:",
+		"- markan-frd.1: LinkedIn OAuth Integration [in_progress]",
+		"- markan-frd.2: LinkedIn Posting Client [open]",
+		"  Description: Build posting client.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt %q does not contain %q", prompt, want)
+		}
+	}
+
+	if strings.Contains(prompt, "markan-frd-related") {
+		t.Fatalf("prompt %q unexpectedly contains non-child dependent", prompt)
+	}
+
+	if strings.Index(prompt, "markan-frd.1") > strings.Index(prompt, "markan-frd.2") {
+		t.Fatalf("prompt %q did not sort child tasks by id", prompt)
 	}
 }
 
