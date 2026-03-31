@@ -82,11 +82,15 @@ func fetchTicket(id string) (*bdIssue, error) {
 		return nil, fmt.Errorf("failed to fetch ticket %s: %w", id, err)
 	}
 
-	var issue bdIssue
-	if err := json.Unmarshal(out, &issue); err != nil {
+	var issues []bdIssue
+	if err := json.Unmarshal(out, &issues); err != nil {
 		return nil, fmt.Errorf("failed to parse ticket JSON: %w", err)
 	}
-	return &issue, nil
+	if len(issues) != 1 {
+		return nil, fmt.Errorf("expected exactly one ticket in bd show output for %s, got %d", id, len(issues))
+	}
+
+	return &issues[0], nil
 }
 
 func moveToInProgress(id string) error {

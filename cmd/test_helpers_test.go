@@ -54,10 +54,11 @@ func resetCommandHooks(t *testing.T) {
 
 func stubExecCommand(output string, runErr error) func(string, ...string) *exec.Cmd {
 	return func(name string, args ...string) *exec.Cmd {
-		cmdArgs := []string{"-test.run=TestExecCommandHelper", "--", output}
+		errText := ""
 		if runErr != nil {
-			cmdArgs = append(cmdArgs, runErr.Error())
+			errText = runErr.Error()
 		}
+		cmdArgs := []string{"-test.run=TestExecCommandHelper", "--", output, errText}
 		cmdArgs = append(cmdArgs, name)
 		cmdArgs = append(cmdArgs, args...)
 		cmd := exec.Command(os.Args[0], cmdArgs...)

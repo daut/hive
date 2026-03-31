@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,40 @@ func TestBuildPromptIncludesTicketDetails(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt %q does not contain %q", prompt, want)
 		}
+	}
+}
+
+func TestFetchTicketParsesBeadsShowJSONArray(t *testing.T) {
+	resetCommandHooks(t)
+
+	want := &bdIssue{
+		ID:          "markan-frd",
+		Title:       "Phase 2 manual LinkedIn publishing rollout",
+		Description: "Track implementation work.",
+	}
+	raw, err := json.Marshal([]bdIssue{*want})
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
+	}
+	execCommand = stubExecCommand(string(raw), nil)
+
+	got, err := fetchTicket(want.ID)
+	if err != nil {
+		t.Fatalf("fetchTicket returned error: %v", err)
+	}
+	if *got != *want {
+		t.Fatalf("fetchTicket returned %+v, want %+v", *got, *want)
+	}
+}
+
+func TestFetchTicketRejectsUnexpectedResultCount(t *testing.T) {
+	resetCommandHooks(t)
+
+	execCommand = stubExecCommand("[]", nil)
+
+	_, err := fetchTicket("markan-frd")
+	if err == nil || !strings.Contains(err.Error(), "expected exactly one ticket") {
+		t.Fatalf("fetchTicket error = %v, want exactly one ticket error", err)
 	}
 }
 
