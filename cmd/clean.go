@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -69,22 +71,110 @@ func runClean(cmd *cobra.Command, args []string) error {
 }
 
 func isBranchMerged(branch string) (bool, error) {
-	out, err := execCommand("git", "branch", "--merged", "main").Output()
+	baseRef, err := mergedBaseRef()
 	if err != nil {
-		return false, fmt.Errorf("failed to check merged branches: %w", err)
+		return false, err
 	}
 
-	return branchInMergedOutput(branch, string(out)), nil
+	merged, err := isAncestorCommit(branch, baseRef)
+	if err != nil {
+		return false, err
+	}
+	if merged {
+		return true, nil
+	}
+
+	return mergeWouldBeNoop(baseRef, branch)
 }
 
-func branchInMergedOutput(branch, raw string) bool {
-	for _, line := range strings.Split(raw, "\n") {
-		name := strings.TrimSpace(line)
-		if name == branch {
-			return true
+func mergedBaseRef() (string, error) {
+	for _, ref := range []string{"origin/main", "main"} {
+		exists, err := gitCommitRefExists(ref)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return ref, nil
 		}
 	}
-	return false
+
+	return "", fmt.Errorf("failed to resolve base branch: neither origin/main nor main exists")
+}
+
+func gitCommitRefExists(ref string) (bool, error) {
+	cmd := execCommand("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err := cmd.Run(); err != nil {
+		if exitCode(err) == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to resolve git ref %q: %w", ref, err)
+	}
+
+	return true, nil
+}
+
+func isAncestorCommit(branch, baseRef string) (bool, error) {
+	cmd := execCommand("git", "merge-base", "--is-ancestor", branch, baseRef)
+	if err := cmd.Run(); err != nil {
+		if exitCode(err) == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check whether %q is merged into %q: %w", branch, baseRef, err)
+	}
+
+	return true, nil
+}
+
+func mergeWouldBeNoop(baseRef, branch string) (bool, error) {
+	mergedTree, err := mergedTreeOID(baseRef, branch)
+	if err != nil {
+		return false, err
+	}
+
+	baseTree, err := treeOID(baseRef)
+	if err != nil {
+		return false, err
+	}
+
+	return mergedTree == baseTree, nil
+}
+
+func mergedTreeOID(baseRef, branch string) (string, error) {
+	out, err := execCommand("git", "merge-tree", "--write-tree", baseRef, branch).Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to evaluate merge of %q into %q: %w", branch, baseRef, err)
+	}
+
+	return firstLine(string(out)), nil
+}
+
+func treeOID(ref string) (string, error) {
+	out, err := execCommand("git", "rev-parse", ref+"^{tree}").Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve tree for %q: %w", ref, err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
+func firstLine(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+
+	return ""
+}
+
+func exitCode(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+
+	return -1
 }
 
 func removeWorktree(path string) error {

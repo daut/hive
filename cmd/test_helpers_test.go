@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -55,16 +56,24 @@ func resetCommandHooks(t *testing.T) {
 func stubExecCommand(output string, runErr error) func(string, ...string) *exec.Cmd {
 	return func(name string, args ...string) *exec.Cmd {
 		errText := ""
+		exitCode := "0"
 		if runErr != nil {
 			errText = runErr.Error()
+			exitCode = "1"
 		}
-		cmdArgs := []string{"-test.run=TestExecCommandHelper", "--", output, errText}
+		cmdArgs := []string{"-test.run=TestExecCommandHelper", "--", output, errText, exitCode}
 		cmdArgs = append(cmdArgs, name)
 		cmdArgs = append(cmdArgs, args...)
 		cmd := exec.Command(os.Args[0], cmdArgs...)
 		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 		return cmd
 	}
+}
+
+type commandResult struct {
+	output   string
+	errText  string
+	exitCode int
 }
 
 func TestExecCommandHelper(t *testing.T) {
@@ -86,9 +95,26 @@ func TestExecCommandHelper(t *testing.T) {
 	}
 
 	output := args[separator+1]
-	if len(args) > separator+2 && args[separator+2] != "" {
-		_, _ = os.Stderr.WriteString(args[separator+2])
-		os.Exit(1)
+	errText := ""
+	if len(args) > separator+2 {
+		errText = args[separator+2]
+	}
+
+	exitCode := 0
+	if errText != "" {
+		exitCode = 1
+	}
+	if len(args) > separator+3 {
+		if parsedCode, err := strconv.Atoi(args[separator+3]); err == nil {
+			exitCode = parsedCode
+		}
+	}
+
+	if exitCode != 0 {
+		if errText != "" {
+			_, _ = os.Stderr.WriteString(errText)
+		}
+		os.Exit(exitCode)
 	}
 
 	_, _ = os.Stdout.WriteString(output)

@@ -2,23 +2,118 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestBranchInMergedOutput(t *testing.T) {
-	raw := strings.Join([]string{
-		"* main",
-		"  hive-123",
-		"  release",
-	}, "\n")
+func TestMergedBaseRefPrefersOriginMain(t *testing.T) {
+	resetCommandHooks(t)
 
-	if !branchInMergedOutput("hive-123", raw) {
+	execCommand = stubExecCommandMap(t, map[string]commandResult{
+		"git\x00rev-parse\x00--verify\x00--quiet\x00origin/main^{commit}": {output: "abc123\n"},
+	})
+
+	baseRef, err := mergedBaseRef()
+	if err != nil {
+		t.Fatalf("mergedBaseRef returned error: %v", err)
+	}
+	if baseRef != "origin/main" {
+		t.Fatalf("mergedBaseRef = %q, want origin/main", baseRef)
+	}
+}
+
+func TestMergedBaseRefFallsBackToMain(t *testing.T) {
+	resetCommandHooks(t)
+
+	execCommand = stubExecCommandMap(t, map[string]commandResult{
+		"git\x00rev-parse\x00--verify\x00--quiet\x00origin/main^{commit}": {exitCode: 1},
+		"git\x00rev-parse\x00--verify\x00--quiet\x00main^{commit}":        {output: "def456\n"},
+	})
+
+	baseRef, err := mergedBaseRef()
+	if err != nil {
+		t.Fatalf("mergedBaseRef returned error: %v", err)
+	}
+	if baseRef != "main" {
+		t.Fatalf("mergedBaseRef = %q, want main", baseRef)
+	}
+}
+
+func TestIsBranchMergedDetectsAncestorCommit(t *testing.T) {
+	resetCommandHooks(t)
+
+	execCommand = stubExecCommandMap(t, map[string]commandResult{
+		"git\x00rev-parse\x00--verify\x00--quiet\x00origin/main^{commit}": {output: "abc123\n"},
+		"git\x00merge-base\x00--is-ancestor\x00hive-123\x00origin/main":   {},
+	})
+
+	merged, err := isBranchMerged("hive-123")
+	if err != nil {
+		t.Fatalf("isBranchMerged returned error: %v", err)
+	}
+	if !merged {
 		t.Fatal("expected branch to be detected as merged")
 	}
-	if branchInMergedOutput("hive-999", raw) {
-		t.Fatal("expected branch to be detected as not merged")
+}
+
+func TestIsBranchMergedDetectsSquashMerge(t *testing.T) {
+	resetCommandHooks(t)
+
+	execCommand = stubExecCommandMap(t, map[string]commandResult{
+		"git\x00rev-parse\x00--verify\x00--quiet\x00origin/main^{commit}": {output: "abc123\n"},
+		"git\x00merge-base\x00--is-ancestor\x00hive-123\x00origin/main":   {exitCode: 1},
+		"git\x00merge-tree\x00--write-tree\x00origin/main\x00hive-123":    {output: "tree123\n"},
+		"git\x00rev-parse\x00origin/main^{tree}":                          {output: "tree123\n"},
+	})
+
+	merged, err := isBranchMerged("hive-123")
+	if err != nil {
+		t.Fatalf("isBranchMerged returned error: %v", err)
+	}
+	if !merged {
+		t.Fatal("expected squash-merged branch to be detected as merged")
+	}
+}
+
+func TestIsBranchMergedRejectsRemainingChangesAfterSquash(t *testing.T) {
+	resetCommandHooks(t)
+
+	execCommand = stubExecCommandMap(t, map[string]commandResult{
+		"git\x00rev-parse\x00--verify\x00--quiet\x00origin/main^{commit}": {output: "abc123\n"},
+		"git\x00merge-base\x00--is-ancestor\x00hive-123\x00origin/main":   {exitCode: 1},
+		"git\x00merge-tree\x00--write-tree\x00origin/main\x00hive-123":    {output: "tree123\n"},
+		"git\x00rev-parse\x00origin/main^{tree}":                          {output: "tree999\n"},
+	})
+
+	merged, err := isBranchMerged("hive-123")
+	if err != nil {
+		t.Fatalf("isBranchMerged returned error: %v", err)
+	}
+	if merged {
+		t.Fatal("expected branch with remaining changes to be detected as not merged")
+	}
+}
+
+func stubExecCommandMap(t *testing.T, results map[string]commandResult) func(string, ...string) *exec.Cmd {
+	t.Helper()
+
+	return func(name string, args ...string) *exec.Cmd {
+		key := strings.Join(append([]string{name}, args...), "\x00")
+		result, ok := results[key]
+		if !ok {
+			t.Fatalf("unexpected execCommand call: %q", key)
+		}
+
+		cmdArgs := []string{"-test.run=TestExecCommandHelper", "--", result.output, result.errText, strconv.Itoa(result.exitCode)}
+		cmdArgs = append(cmdArgs, name)
+		cmdArgs = append(cmdArgs, args...)
+
+		cmd := exec.Command(os.Args[0], cmdArgs...)
+		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+		return cmd
 	}
 }
 
