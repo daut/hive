@@ -32,15 +32,18 @@ type bdDependent struct {
 }
 
 var (
-	fetchTicketFn      = fetchTicket
-	moveToInProgressFn = moveToInProgress
-	gitRepoRootFn      = gitRepoRoot
-	createWorktreeFn   = createWorktree
-	launchOpencodeFn   = launchOpencode
-	execCommand        = exec.Command
-	lookPath           = exec.LookPath
-	changeDir          = os.Chdir
-	syscallExec        = syscall.Exec
+	fetchTicketFn        = fetchTicket
+	moveToInProgressFn   = moveToInProgress
+	gitRepoRootFn        = gitRepoRoot
+	createWorktreeFn     = createWorktree
+	linkUntrackedFilesFn = linkUntrackedFiles
+	launchOpencodeFn     = launchOpencode
+	gitHasTrackedFilesFn = gitHasTrackedFiles
+	gitUntrackedFilesFn  = gitUntrackedFiles
+	execCommand          = exec.Command
+	lookPath             = exec.LookPath
+	changeDir            = os.Chdir
+	syscallExec          = syscall.Exec
 )
 
 var startCmd = &cobra.Command{
@@ -83,6 +86,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(out, "Worktree: %s\n", worktreePath)
 
+	linked, err := linkUntrackedFilesFn(repoRoot, worktreePath)
+	if err != nil {
+		return err
+	}
+	if linked > 0 {
+		fmt.Fprintf(out, "Linked %d untracked files/dirs\n", linked)
+	}
+
 	prompt := buildPrompt(issue)
 	fmt.Fprintln(out, "Launching opencode...")
 	return launchOpencodeFn(worktreePath, prompt)
@@ -124,6 +135,106 @@ func createWorktree(path, branch string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func linkUntrackedFiles(repoRoot, worktreePath string) (int, error) {
+	entries, err := os.ReadDir(repoRoot)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read repo root: %w", err)
+	}
+
+	linked := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == ".git" || name == ".worktrees" {
+			continue
+		}
+
+		src := filepath.Join(repoRoot, name)
+		dst := filepath.Join(worktreePath, name)
+
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		}
+
+		tracked, err := gitHasTrackedFilesFn(repoRoot, name)
+		if err != nil {
+			return linked, fmt.Errorf("failed to check tracked status of %s: %w", name, err)
+		}
+
+		if !tracked {
+			if err := os.Symlink(src, dst); err != nil {
+				return linked, fmt.Errorf("failed to symlink %s: %w", name, err)
+			}
+			linked++
+			continue
+		}
+
+		if !entry.IsDir() {
+			continue
+		}
+
+		untracked, err := gitUntrackedFilesFn(repoRoot, name)
+		if err != nil {
+			return linked, fmt.Errorf("failed to list untracked files in %s: %w", name, err)
+		}
+
+		for _, f := range untracked {
+			srcFile := filepath.Join(repoRoot, f)
+			dstFile := filepath.Join(worktreePath, f)
+
+			if _, err := os.Lstat(dstFile); err == nil {
+				continue
+			}
+
+			if err := os.MkdirAll(filepath.Dir(dstFile), 0o755); err != nil {
+				return linked, fmt.Errorf("failed to create directory for %s: %w", f, err)
+			}
+			if err := os.Symlink(srcFile, dstFile); err != nil {
+				return linked, fmt.Errorf("failed to symlink %s: %w", f, err)
+			}
+			linked++
+		}
+	}
+
+	return linked, nil
+}
+
+func gitHasTrackedFiles(repoRoot, path string) (bool, error) {
+	cmd := exec.Command("git", "ls-files", "--", path)
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git ls-files failed: %w", err)
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+func gitUntrackedFiles(repoRoot, dir string) ([]string, error) {
+	var files []string
+	seen := map[string]bool{}
+
+	for _, extraArgs := range [][]string{
+		{"--others", "--exclude-standard"},
+		{"--others", "--ignored", "--exclude-standard"},
+	} {
+		args := append([]string{"ls-files"}, extraArgs...)
+		args = append(args, "--", dir)
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoRoot
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("git ls-files %s failed: %w", strings.Join(extraArgs, " "), err)
+		}
+		for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if f != "" && !seen[f] {
+				seen[f] = true
+				files = append(files, f)
+			}
+		}
+	}
+
+	return files, nil
 }
 
 func buildPrompt(issue *bdIssue) string {

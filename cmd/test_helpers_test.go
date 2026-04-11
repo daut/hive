@@ -24,7 +24,10 @@ func resetCommandHooks(t *testing.T) {
 	originalMoveToInProgress := moveToInProgressFn
 	originalGitRepoRoot := gitRepoRootFn
 	originalCreateWorktree := createWorktreeFn
+	originalLinkUntrackedFiles := linkUntrackedFilesFn
 	originalLaunchOpencode := launchOpencodeFn
+	originalGitHasTrackedFiles := gitHasTrackedFilesFn
+	originalGitUntrackedFiles := gitUntrackedFilesFn
 	originalListWorktrees := listWorktreesFn
 	originalIsBranchMerged := isBranchMergedFn
 	originalRemoveWorktree := removeWorktreeFn
@@ -40,7 +43,10 @@ func resetCommandHooks(t *testing.T) {
 		moveToInProgressFn = originalMoveToInProgress
 		gitRepoRootFn = originalGitRepoRoot
 		createWorktreeFn = originalCreateWorktree
+		linkUntrackedFilesFn = originalLinkUntrackedFiles
 		launchOpencodeFn = originalLaunchOpencode
+		gitHasTrackedFilesFn = originalGitHasTrackedFiles
+		gitUntrackedFilesFn = originalGitUntrackedFiles
 		listWorktreesFn = originalListWorktrees
 		isBranchMergedFn = originalIsBranchMerged
 		removeWorktreeFn = originalRemoveWorktree
